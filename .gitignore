@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build artifacts
+*.zip
+*.crx
+*.pem
+dist/
+build/
+
+# Runtime
+logs/
+scripts/local.env.bat
+scripts/local.env.sh
