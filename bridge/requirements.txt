@@ -1,0 +1,2 @@
+# server.py uses only the Python standard library, so this file is empty
+# on purpose. Python 3.9+ recommended.

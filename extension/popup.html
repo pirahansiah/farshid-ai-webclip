@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Farshid WebClip AI</title>
+    <style>
+      body { font-family: system-ui, sans-serif; width: 340px; padding: 12px; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      label { display: block; font-size: 12px; margin-top: 8px; color: #333; }
+      input, select { width: 100%; box-sizing: border-box; padding: 4px; font-size: 13px; }
+      button { margin-top: 8px; width: 100%; padding: 8px; cursor: pointer; }
+      button.primary { background: #1a73e8; color: #fff; border: 0; border-radius: 4px; font-weight: 600; }
+      .row { display: flex; gap: 6px; }
+      .row > button, .row > input { margin-top: 8px; }
+      .row > button { flex: 0 0 auto; width: auto; padding: 8px 10px; }
+      .row > input { flex: 1 1 auto; }
+      #status { margin-top: 10px; font-size: 12px; white-space: pre-wrap; }
+      .ok { color: #0a7d2c; }
+      .err { color: #b00020; }
+      .muted { color: #777; font-size: 11px; }
+      .hint { font-size: 11px; color: #555; margin-top: 6px; }
+      details { margin-top: 10px; }
+      summary { font-size: 12px; color: #555; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <h1>Farshid WebClip AI <span id="ver" class="muted"></span></h1>
+
+    <label>Model
+      <select id="model"></select>
+    </label>
+    <div id="modelHint" class="muted"></div>
+
+    <button id="clipAuto" class="primary">Clip (selection if any, else page)</button>
+    <div class="row">
+      <button id="clipSelection" style="flex:1">Selection only</button>
+      <button id="clipPage" style="flex:1">Whole page</button>
+    </div>
+    <div class="hint">
+      Tip: highlight text on the page (e.g. one LinkedIn post),
+      then right-click &rarr; <em>Clip selection with Farshid AI</em>.
+    </div>
+
+    <details>
+      <summary>Pull a new model from Ollama</summary>
+      <div class="row">
+        <input id="pullName" type="text" placeholder="e.g. llama3.2:3b" />
+        <button id="pullBtn">Pull</button>
+      </div>
+      <div class="muted">
+        Models are downloaded by Ollama on this machine. May take a while.
+      </div>
+    </details>
+
+    <details>
+      <summary>Bridge URL</summary>
+      <input id="bridgeUrl" type="text" />
+      <button id="save">Save bridge URL</button>
+    </details>
+
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>
