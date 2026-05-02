@@ -74,6 +74,19 @@ if "%PYTHON%"=="" set "PYTHON=python"
 if "%OLLAMA%"=="" set "OLLAMA=ollama"
 if "%MODEL%"==""  set "MODEL=granite4-fast:latest"
 
+REM If `ollama` is not on PATH, fall back to the standard per-user
+REM installer location used by the official Windows installer.
+REM Without this, the hidden VBS launcher silently fails to start
+REM Ollama and the bridge returns "ollama unreachable".
+where %OLLAMA% >nul 2>&1
+if errorlevel 1 (
+    if exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
+        set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
+    ) else if exist "%ProgramFiles%\Ollama\ollama.exe" (
+        set "OLLAMA=%ProgramFiles%\Ollama\ollama.exe"
+    )
+)
+
 REM Staging dir under %USERPROFILE%\.farshid\runtime so the project
 REM folder is never required at runtime. Mirrors the macOS / Linux
 REM script. Override with STAGE_DIR in local.env.bat if you want.
