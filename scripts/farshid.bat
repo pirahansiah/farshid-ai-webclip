@@ -34,6 +34,26 @@ REM    set STAGE_DIR=C:\path\to\custom\runtime
 REM ============================================================
 setlocal EnableDelayedExpansion
 
+REM ============================================================
+REM When this script self-elevates via UAC, Windows replaces
+REM USERPROFILE / APPDATA with the elevating admin account.
+REM Our self-elevation code passes the real user's profile path
+REM as a /home:... flag so we can put STAGE_DIR and the Startup
+REM shortcut in the actual user's home, not the admin's.
+REM ============================================================
+set "_REAL_HOME="
+for %%A in (%*) do (
+    set "_A=%%~A"
+    if /I "!_A:~0,6!"=="/home:" set "_REAL_HOME=!_A:~6!"
+)
+if not "%_REAL_HOME%"=="" (
+    if exist "%_REAL_HOME%" (
+        set "USERPROFILE=%_REAL_HOME%"
+        set "APPDATA=%_REAL_HOME%\AppData\Roaming"
+        set "LOCALAPPDATA=%_REAL_HOME%\AppData\Local"
+    )
+)
+
 set "SCRIPT_DIR=%~dp0"
 set "PROJECT_DIR=%SCRIPT_DIR%.."
 set "BRIDGE_DIR=%PROJECT_DIR%\bridge"
@@ -52,7 +72,7 @@ if exist "%SCRIPT_DIR%local.env.bat" call "%SCRIPT_DIR%local.env.bat"
 
 if "%PYTHON%"=="" set "PYTHON=python"
 if "%OLLAMA%"=="" set "OLLAMA=ollama"
-if "%MODEL%"==""  set "MODEL=minicpm-v:latest"
+if "%MODEL%"==""  set "MODEL=granite4-fast:latest"
 
 REM Staging dir under %USERPROFILE%\.farshid\runtime so the project
 REM folder is never required at runtime. Mirrors the macOS / Linux
@@ -72,8 +92,12 @@ set "BRIDGE_LINK=%STARTUP%\Farshid AI WebClip.lnk"
 set "CHROME_LINK=%STARTUP%\Farshid AI WebClip - Chrome.lnk"
 
 set "CMD=%~1"
-if "%CMD%"=="" set "CMD=help"
+if "%CMD%"=="" set "CMD=setup"
+REM Strip a leading /home:... arg so it isn't treated as a command.
+if /I "%CMD:~0,6%"=="/home:" set "CMD=%~2"
+if "%CMD%"=="" set "CMD=setup"
 
+if /I "%CMD%"=="setup"          goto :cmd_setup
 if /I "%CMD%"=="start"     goto :cmd_start
 if /I "%CMD%"=="chrome"    goto :cmd_chrome
 if /I "%CMD%"=="all"       goto :cmd_all
@@ -83,6 +107,8 @@ if /I "%CMD%"=="pack"           goto :cmd_pack
 if /I "%CMD%"=="stage"          goto :cmd_stage
 if /I "%CMD%"=="forceinstall"   goto :cmd_forceinstall
 if /I "%CMD%"=="forceuninstall" goto :cmd_forceuninstall
+if /I "%CMD%"=="doctor"         goto :cmd_doctor
+if /I "%CMD%"=="moc"            goto :cmd_moc
 if /I "%CMD%"=="help"           goto :cmd_help
 if /I "%CMD%"=="-h"        goto :cmd_help
 if /I "%CMD%"=="/?"        goto :cmd_help
@@ -95,22 +121,112 @@ REM ------------------------------------------------------------
 echo.
 echo Farshid AI WebClip
 echo.
-echo   1)  farshid.bat install   One-time setup. Packs the extension,
-echo                              stages a self-contained copy under
-echo                              %%USERPROFILE%%\.farshid\runtime,
-echo                              writes Chrome's force-install policy
-echo                              ^(HKLM, UAC prompt^), and auto-starts
-echo                              the bridge at login.
+echo   Just double-click farshid.bat ^(no arguments^).
+echo   It does everything for you:
+echo     - packs the extension into a stable .crx
+echo     - copies the runtime into %%USERPROFILE%%\.farshid\runtime
+echo     - registers the extension with Chrome ^(asks for UAC once^)
+echo     - installs an auto-start shortcut so the bridge runs at login
+echo     - starts the bridge in this window
+echo   Re-run any time you change the extension or bridge - it just
+echo   re-syncs everything safely.
 echo.
-echo   2)  farshid.bat start     Start Ollama + bridge now. The login
-echo                              auto-start runs this for you, so you
-echo                              rarely need to type it.
+echo   farshid.bat start     Just start the bridge ^(no setup^).
+echo   farshid.bat doctor    Diagnose: is everything healthy?
 echo.
-echo   3)  farshid.bat stage     Re-copy bridge + extension + .crx into
-echo                              %%USERPROFILE%%\.farshid\runtime.
-echo                              Run after editing extension\ or bridge\.
+echo Advanced:  install ^| pack ^| stage ^| forceinstall ^| forceuninstall ^| uninstall ^| chrome ^| all ^| moc
 echo.
-echo Advanced:  pack ^| stage ^| forceinstall ^| forceuninstall ^| uninstall ^| chrome ^| all
+endlocal
+exit /b 0
+
+REM ------------------------------------------------------------
+REM Default action when the user just double-clicks farshid.bat.
+REM No knowledge required: it does the full one-time setup
+REM (UAC prompt the first time), then starts the bridge in this
+REM same window. Closing the window stops the bridge.
+REM Re-running it later is safe: it just re-syncs everything
+REM (re-packs the .crx, re-stages, fixes the policy + shortcut)
+REM so any changes to the extension or bridge take effect.
+:cmd_setup
+echo.
+echo === Farshid AI WebClip - one-click setup ===
+echo.
+net session >nul 2>&1
+if errorlevel 1 (
+    echo [farshid] One-time admin step needed to register the extension
+    echo           with Chrome. A UAC prompt will appear next.
+    powershell -NoProfile -Command "Start-Process -Wait -Verb RunAs -FilePath '%~f0' -ArgumentList @('/home:%USERPROFILE%','install')"
+    if errorlevel 1 (
+        echo [farshid] Elevated setup was cancelled or failed.
+        pause
+        endlocal
+        exit /b 1
+    )
+) else (
+    REM Already running elevated - just do the install steps inline.
+    call :do_pack
+    if errorlevel 1 ( pause & endlocal & exit /b 1 )
+    call :do_stage
+    if errorlevel 1 ( pause & endlocal & exit /b 1 )
+    call :do_forceinstall
+    if errorlevel 1 ( pause & endlocal & exit /b 1 )
+    if exist "%CHROME_LINK%" del "%CHROME_LINK%"
+    set "FAIL=0"
+    call :install_shortcut "%STAGE_LAUNCHER%" "start" "%BRIDGE_LINK%" "Farshid AI WebClip bridge + Ollama"
+    if not "%FAIL%"=="0" ( pause & endlocal & exit /b 1 )
+)
+echo.
+echo === Setup complete. ===
+echo.
+echo NEXT STEPS:
+echo   1) Fully quit Chrome ^(close ALL windows AND any tray icon^).
+echo   2) Reopen Chrome - 'Farshid AI WebClip' will be loaded automatically.
+echo.
+echo The bridge will now start in this window. Closing this window stops it.
+echo It will auto-start at every Windows login from now on.
+echo.
+set "LAUNCH_CHROME="
+goto :cmd_start
+
+REM ------------------------------------------------------------
+:cmd_moc
+REM Rebuild %USERPROFILE%\.farshid\MOC.md from existing clips.
+curl -fsS --max-time 2 "http://127.0.0.1:8765/moc" >nul 2>nul
+if %ERRORLEVEL%==0 (
+    curl -fsS "http://127.0.0.1:8765/moc"
+    echo.
+) else (
+    if exist "%STAGE_BRIDGE%\server.py" (
+        "%PYTHON%" "%STAGE_BRIDGE%\server.py" --moc
+    ) else (
+        "%PYTHON%" "%PROJECT_DIR%\bridge\server.py" --moc
+    )
+)
+endlocal
+exit /b 0
+
+REM ------------------------------------------------------------
+:cmd_doctor
+echo.
+echo === Farshid AI WebClip - doctor ===
+echo.
+echo [1] OS:                Windows (%PROCESSOR_ARCHITECTURE%)
+echo [2] Project dir:       %PROJECT_DIR%
+echo [3] Stage dir:         %STAGE_DIR%
+if exist "%STAGE_CRX%" (echo     OK   %STAGE_CRX%) else (echo     MISS %STAGE_CRX%   ^(run: farshid.bat install^))
+if exist "%STAGE_UPDATES_XML%" (echo     OK   %STAGE_UPDATES_XML%) else (echo     MISS %STAGE_UPDATES_XML%)
+if exist "%STAGE_EXT%\manifest.json" (
+    echo [4] Staged extension:  OK   %STAGE_EXT%
+    findstr /C:"\"tabs\"" "%STAGE_EXT%\manifest.json" >nul 2>nul && (echo         snapshot perm:    OK ^('tabs' present^)) || (echo         snapshot perm:    MISS ^('tabs' missing - re-stage^))
+) else (
+    echo [4] Staged extension:  MISS %STAGE_EXT%   ^(run: farshid.bat stage^)
+)
+if exist "%USERPROFILE%\.farshid\template-webclip-ai.md" (echo [5] PKM template:      OK   %USERPROFILE%\.farshid\template-webclip-ai.md) else (echo [5] PKM template:      MISS  ^(auto-created on first clip^))
+echo [6] Bridge /health:
+curl -fsS --max-time 2 "http://127.0.0.1:8765/health" 2>nul && echo. || echo     DOWN  ^(run: farshid.bat start^)
+echo [7] Startup shortcut:
+set "_LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Farshid AI WebClip.lnk"
+if exist "%_LNK%" (echo     OK   %_LNK%) else (echo     MISS %_LNK%   ^(run: farshid.bat install^))
 echo.
 endlocal
 exit /b 0
@@ -205,7 +321,7 @@ REM Startup-folder shortcut goes in the right place.)
 net session >nul 2>&1
 if errorlevel 1 (
     echo [farshid] Elevation required. Re-launching as administrator ^(UAC^)...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList 'install' -Verb RunAs"
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList @('/home:%USERPROFILE%','install') -Verb RunAs"
     endlocal
     exit /b 0
 )
@@ -438,8 +554,8 @@ REM Self-elevate if needed.
 net session >nul 2>&1
 if errorlevel 1 (
     echo [farshid] Elevation required to write Chrome policy under HKLM.
-    echo [farshid] Re-launching as administrator (UAC prompt)...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList 'forceinstall' -Verb RunAs"
+    echo [farshid] Re-launching as administrator ^(UAC prompt^)...
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList @('/home:%USERPROFILE%','forceinstall') -Verb RunAs"
     endlocal
     exit /b 0
 )
@@ -502,8 +618,8 @@ set "SOURCES_KEY=HKLM\Software\Policies\Google\Chrome\ExtensionInstallSources"
 net session >nul 2>&1
 if errorlevel 1 (
     echo [farshid] Elevation required to remove Chrome policy under HKLM.
-    echo [farshid] Re-launching as administrator (UAC prompt)...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList 'forceuninstall' -Verb RunAs"
+    echo [farshid] Re-launching as administrator ^(UAC prompt^)...
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList @('/home:%USERPROFILE%','forceuninstall') -Verb RunAs"
     endlocal
     exit /b 0
 )

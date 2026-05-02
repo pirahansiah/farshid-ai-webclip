@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Farshid AI WebClip",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Clip the current page or your highlighted selection, summarize with Ollama, and save into ~/.farshid using a template.",
-  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus", "tabs"],
   "host_permissions": [
     "http://localhost/*",
     "http://127.0.0.1/*",

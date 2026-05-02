@@ -20,14 +20,84 @@ function farshidExtractInPage(mode) {
   function collectLinksFromRoot(root) {
     if (!root || !root.querySelectorAll) return [];
     return Array.from(root.querySelectorAll("a[href]"))
-      .map((a) => a.href)
-      .filter((h) => h && !h.startsWith("javascript:"));
+      .map((a) => ({
+        href: a.href,
+        text: (a.innerText || a.textContent || "").replace(/\s+/g, " ").trim(),
+      }))
+      .filter((l) => l.href && !l.href.startsWith("javascript:"));
   }
   function cleanText(t) {
     return (t || "").replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   }
 
+  // ----- YouTube --------------------------------------------------------
+  // Lightweight: pull the obvious DOM-rendered metadata + any visible
+  // transcript panel ("Show transcript"). No external API calls, no auth.
+  function isYouTubeWatch() {
+    return /^(?:https?:)?\/\/(?:www\.)?(?:youtube\.com\/watch|youtu\.be\/)/i
+      .test(location.href);
+  }
+  function ytVideoId() {
+    try {
+      const u = new URL(location.href);
+      if (u.hostname.includes("youtu.be")) {
+        return u.pathname.replace(/^\//, "").split(/[/?#]/)[0] || "";
+      }
+      return u.searchParams.get("v") || "";
+    } catch (_) { return ""; }
+  }
+  function ytText(sel) {
+    const el = document.querySelector(sel);
+    return (el?.innerText || el?.textContent || "").trim();
+  }
+  function extractYouTubeTranscript() {
+    // Intentionally disabled. The transcript panel only exists in the
+    // DOM after the user clicks "Show transcript", which is fragile and
+    // brittle across YouTube redesigns. We rely on the video
+    // description (always present) instead.
+    return "";
+  }
+  function extractYouTube() {
+    const vid = ytVideoId();
+    const title =
+      ytText("h1.ytd-watch-metadata") ||
+      ytText("h1.title") ||
+      document.title.replace(/ - YouTube$/, "");
+    const channel =
+      ytText("ytd-channel-name #text a") ||
+      ytText("ytd-channel-name a") ||
+      ytText("#owner #channel-name");
+    const views = ytText("#info span.view-count, ytd-watch-info-text");
+    const description =
+      ytText("#description-inline-expander") ||
+      ytText("ytd-text-inline-expander") ||
+      document.querySelector('meta[name="description"]')?.content || "";
+    const parts = [];
+    if (channel) parts.push(`Channel: ${channel}`);
+    if (views)   parts.push(views);
+    if (description) parts.push("Description:\n" + description);
+    const text = parts.join("\n\n").slice(0, 20000);
+    const images = vid
+      ? [`https://i.ytimg.com/vi/${vid}/maxresdefault.jpg`]
+      : collectImagesFromRoot(document).slice(0, 5);
+    return {
+      title: title || document.title,
+      url: location.href,
+      description: (description || "").slice(0, 280),
+      text,
+      images,
+      image_count: images.length,
+      links: collectLinksFromRoot(document).slice(0, 50),
+      is_selection: false,
+      kind: "youtube",
+      youtube_id: vid,
+      has_transcript: false,
+    };
+  }
+  // ---------------------------------------------------------------------
+
   function extractWholePage() {
+    if (isYouTubeWatch()) return extractYouTube();
     const main =
       document.querySelector("article") ||
       document.querySelector("main") ||

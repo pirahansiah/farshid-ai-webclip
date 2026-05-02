@@ -49,7 +49,7 @@ mkdir -p "$LOG_DIR"
 
 PYTHON="${PYTHON:-python3}"
 OLLAMA="${OLLAMA:-ollama}"
-MODEL="${MODEL:-minicpm-v:latest}"
+MODEL="${MODEL:-granite4-fast:latest}"
 OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
 CHROME_PROFILE="${CHROME_PROFILE:-$HOME/.farshid-ai-webclip/chrome-profile}"
 
@@ -789,9 +789,29 @@ cmd_doctor() {
     local stage_ext="$STAGE_DIR/extension"
     if [ -f "$stage_ext/manifest.json" ]; then
         echo "    OK   $stage_ext"
+        local mver
+        mver=$(awk -F'"' '/"version"/{print $4; exit}' "$stage_ext/manifest.json" 2>/dev/null || echo "?")
+        echo "         manifest version: $mver  (need >= 0.4.0 for snapshot capture)"
+        if grep -q '"tabs"' "$stage_ext/manifest.json" 2>/dev/null; then
+            echo "         snapshot perm:    OK ('tabs' present)"
+        else
+            echo "         snapshot perm:    MISS ('tabs' missing - re-stage)"
+        fi
     else
         echo "    MISS $stage_ext   (run: $SELF stage)"
     fi
+    echo "[7b] PKM template:"
+    local tmpl="$HOME/.farshid/template-webclip-ai.md"
+    if [ -f "$tmpl" ]; then
+        local lines fields
+        lines=$(wc -l < "$tmpl" | tr -d ' ')
+        fields=$(grep -oE '\{[^{}]+\}' "$tmpl" | sort -u | wc -l | tr -d ' ')
+        echo "    OK   $tmpl  ($lines lines, $fields unique placeholders)"
+    else
+        echo "    MISS $tmpl  (auto-created on first clip)"
+    fi
+    echo "[7c] Recent clips (last 3):"
+    ls -1t "$HOME/.farshid/"*.md 2>/dev/null | grep -v template | head -3 | sed 's|^|    |' || echo "    (none yet)"
     case "$(uname -s)" in
         Darwin)
             local agent="$HOME/Library/LaunchAgents/com.farshid.aiwebclip.plist"
@@ -839,6 +859,16 @@ case "${1:-help}" in
     install)          cmd_install ;;
     uninstall)        cmd_uninstall ;;
     doctor)           cmd_doctor ;;
+    moc)
+        # Rebuild ~/.farshid/MOC.md from existing clips. Tries the
+        # running bridge first, falls back to a local one-shot.
+        if curl -fsS --max-time 2 "http://127.0.0.1:8765/moc" >/dev/null 2>&1; then
+            curl -fsS "http://127.0.0.1:8765/moc" && echo
+        else
+            "${PYTHON:-python3}" "$STAGE_BRIDGE/server.py" --moc 2>/dev/null \
+                || "${PYTHON:-python3}" "$PROJECT_DIR/bridge/server.py" --moc
+        fi
+        ;;
     help|-h|--help)   usage ;;
     *) echo "[farshid] Unknown command: $1"; usage; exit 1 ;;
 esac

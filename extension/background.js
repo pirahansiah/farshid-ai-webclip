@@ -62,7 +62,20 @@ async function clip(mode, modelOverride) {
 
   const page = await extractFromTab(tab.id, mode);
 
+  // Best-effort visible-tab screenshot. Failure is non-fatal: many
+  // pages (chrome://, file://, devtools, some PDF viewers) refuse the
+  // capture; we still want to save the rest of the clip.
+  let screenshot = null;
+  try {
+    screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: "png",
+    });
+  } catch (_) {
+    screenshot = null;
+  }
+
   const body = { page };
+  if (screenshot) body.screenshot = screenshot; // data:image/png;base64,...
   if (modelOverride) body.model = modelOverride;
 
   const res = await fetch(`${settings.bridgeUrl}/clip`, {
