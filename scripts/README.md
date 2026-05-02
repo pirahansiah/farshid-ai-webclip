@@ -13,16 +13,19 @@ Both expose the same subcommands:
 
 | Command           | What it does                                                                                                                                       |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `setup` *(Windows only, also default when you double-click `farshid.bat`)* | One-click flow: self-elevates with UAC if needed, runs the full install steps, then keeps the bridge running in the same window. |
-| `install`         | The big one. Pack + stage + register auto-start. On Linux/Windows also force-installs into Chrome via enterprise policy. On macOS opens `chrome://extensions` and tells you the one Load-unpacked click left to do. |
-| `start`           | Start Ollama (if not running) + the local bridge in the foreground. The auto-start from `install` calls this at every login.                        |
+| `setup` *(Windows; default when you double-click `farshid.bat`)* | One-click no-admin flow: pack + stage + install hidden auto-start + start the bridge hidden in the background + open `chrome://extensions` for the one-time Load-unpacked click. Path is auto-copied to your clipboard. |
+| `install`         | The big one. Pack + stage + register auto-start. On Linux force-installs into Chrome via enterprise policy. On macOS / Windows opens `chrome://extensions` and tells you the one Load-unpacked click left to do (no admin). |
+| `start`           | Start Ollama (if not running) + the local bridge in the foreground (visible window — useful for debugging).                                          |
+| `start-hidden`    | *(Windows only)* Start the bridge + Ollama in the background with no console window. Same launcher used by login auto-start.                        |
+| `stop`            | *(Windows only)* Stop the running bridge process bound to port 8765.                                                                                 |
 | `stage`           | Re-copy the bridge + extension + .crx into `~/.farshid/runtime/`. Run this if you change `extension/` or `bridge/`.                                  |
 | `doctor`          | Diagnose: bridge up? extension folder staged? auto-start loaded? PKM template stats? recent clips?                                                  |
 | `moc`             | Rebuild `~/.farshid/MOC.md` (Map of Content) from existing clips. Also runs automatically after every save.                                         |
 | `pack`            | Just rebuild `dist/farshid-ai-webclip.crx` + `.pem` + `updates.xml` and print the extension ID.                                                     |
 | `chrome`          | Launch a dedicated Chrome instance with `--load-extension=extension/`. Mostly useful when developing.                                               |
 | `all`             | `start` + `chrome`.                                                                                                                                |
-| `forceinstall`    | (Linux/Windows) write Chrome's `ExtensionInstallForcelist`. (macOS: also generates a `.mobileconfig`, but Apple silently refuses to install unsigned profiles on personal Macs — use Load unpacked instead.) |
+| `cleanup-admin`   | *(Windows only)* One-time admin step (UAC) to delete a leftover HKLM `ExtensionInstallForcelist` policy from older versions of this script. After running once you never need admin again. |
+| `forceinstall`    | (Linux only on the new flow) write Chrome's `ExtensionInstallForcelist`. (Windows: removed by default — see `cleanup-admin`. macOS: also generates a `.mobileconfig`, but Apple silently refuses to install unsigned profiles on personal Macs.) |
 | `forceuninstall`  | Remove the policy / external-extension JSON written by `forceinstall`.                                                                              |
 | `uninstall`       | Remove the auto-start entry.                                                                                                                       |
 | `help`            | Show usage.                                                                                                                                        |
@@ -36,10 +39,12 @@ bash scripts/farshid.sh uninstall
 ```
 
 ```bat
-:: Windows
-scripts\farshid.bat install
-scripts\farshid.bat start
-scripts\farshid.bat uninstall
+:: Windows  (no admin needed)
+scripts\farshid.bat            :: full one-click setup, then exits;
+                               :: bridge keeps running hidden in background.
+scripts\farshid.bat doctor     :: health-check
+scripts\farshid.bat stop       :: stop the hidden bridge
+scripts\farshid.bat uninstall  :: remove auto-start shortcut
 ```
 
 ## Why a separate `~/.farshid/runtime/` staging dir?
@@ -103,7 +108,7 @@ REM optional: set CHROME=C:\Path\To\chrome.exe
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | macOS    | LaunchAgent `~/Library/LaunchAgents/com.farshid.aiwebclip.plist` running the staged `farshid.sh start` (`RunAtLoad=true`, `KeepAlive=true`).      | `chrome://extensions` → **Load unpacked** → `~/.farshid/runtime/extension/`. One-time, then forever.|
 | Linux    | systemd `--user` unit `~/.config/systemd/user/farshid-ai-webclip.service` running `farshid.sh start`. Use `sudo loginctl enable-linger $USER` to run at boot, not just login. | `ExtensionInstallForcelist` JSON in `/etc/opt/chrome/policies/managed/`, pointing at the staged `~/.farshid/runtime/dist/updates.xml`. Auto-installs. |
-| Windows  | One `.lnk` in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` pointing at the **staged** `%USERPROFILE%\.farshid\runtime\farshid.bat start`. | `HKLM\Software\Policies\Google\Chrome\ExtensionInstallForcelist`, pointing at the staged `updates.xml` / `.crx`. Auto-installs (UAC prompt once). |
+| Windows  | One `.lnk` in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` pointing at `wscript.exe %USERPROFILE%\.farshid\runtime\bridge-hidden.vbs`. The VBS launches Ollama (if needed) + the Python bridge with no console window. | `chrome://extensions` → **Load unpacked** → `%USERPROFILE%\.farshid\runtime\extension`. One-time, no admin. The path is auto-copied to your clipboard by `farshid.bat`. |
 
 `uninstall` removes whichever of the above was created.
 
@@ -138,7 +143,10 @@ If something is stuck:
   ```
 - Windows:
   ```bat
+  scripts\farshid.bat stop
   del "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Farshid AI WebClip.lnk"
-  taskkill /F /IM python.exe
   rmdir /S /Q "%USERPROFILE%\.farshid\runtime"
+  :: If `farshid.bat doctor` warns about a leftover HKLM policy from
+  :: an old version of this script, also run (one-time UAC):
+  scripts\farshid.bat cleanup-admin
   ```

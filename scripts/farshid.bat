@@ -83,6 +83,7 @@ set "STAGE_DIST=%STAGE_DIR%\dist"
 set "STAGE_EXT=%STAGE_DIR%\extension"
 set "STAGE_LOG_DIR=%STAGE_DIR%\logs"
 set "STAGE_LAUNCHER=%STAGE_DIR%\farshid.bat"
+set "STAGE_HIDDEN_VBS=%STAGE_DIR%\bridge-hidden.vbs"
 set "STAGE_CRX=%STAGE_DIST%\farshid-ai-webclip.crx"
 set "STAGE_PEM=%STAGE_DIST%\farshid-ai-webclip.pem"
 set "STAGE_UPDATES_XML=%STAGE_DIST%\updates.xml"
@@ -99,14 +100,19 @@ if "%CMD%"=="" set "CMD=setup"
 
 if /I "%CMD%"=="setup"          goto :cmd_setup
 if /I "%CMD%"=="start"     goto :cmd_start
+if /I "%CMD%"=="start-hidden"  goto :cmd_start_hidden
+if /I "%CMD%"=="stop"      goto :cmd_stop
 if /I "%CMD%"=="chrome"    goto :cmd_chrome
 if /I "%CMD%"=="all"       goto :cmd_all
-if /I "%CMD%"=="install"        goto :cmd_install
+if /I "%CMD%"=="install"        goto :cmd_setup
 if /I "%CMD%"=="uninstall"      goto :cmd_uninstall
 if /I "%CMD%"=="pack"           goto :cmd_pack
 if /I "%CMD%"=="stage"          goto :cmd_stage
+if /I "%CMD%"=="userinstall"    goto :cmd_userinstall
+if /I "%CMD%"=="useruninstall"  goto :cmd_useruninstall
 if /I "%CMD%"=="forceinstall"   goto :cmd_forceinstall
 if /I "%CMD%"=="forceuninstall" goto :cmd_forceuninstall
+if /I "%CMD%"=="cleanup-admin"  goto :cmd_cleanup_admin
 if /I "%CMD%"=="doctor"         goto :cmd_doctor
 if /I "%CMD%"=="moc"            goto :cmd_moc
 if /I "%CMD%"=="help"           goto :cmd_help
@@ -122,19 +128,27 @@ echo.
 echo Farshid AI WebClip
 echo.
 echo   Just double-click farshid.bat ^(no arguments^).
-echo   It does everything for you:
+echo   It does everything for you, NO admin password needed:
 echo     - packs the extension into a stable .crx
 echo     - copies the runtime into %%USERPROFILE%%\.farshid\runtime
-echo     - registers the extension with Chrome ^(asks for UAC once^)
-echo     - installs an auto-start shortcut so the bridge runs at login
-echo     - starts the bridge in this window
+echo     - starts the bridge + Ollama in the background ^(no window^)
+echo     - installs an auto-start shortcut so the bridge runs hidden at login
+echo     - opens chrome://extensions for the one-time Load-unpacked click
 echo   Re-run any time you change the extension or bridge - it just
-echo   re-syncs everything safely.
+echo   re-syncs everything safely; the staged path never changes,
+echo   so Chrome keeps the extension loaded.
 echo.
-echo   farshid.bat start     Just start the bridge ^(no setup^).
-echo   farshid.bat doctor    Diagnose: is everything healthy?
+echo   farshid.bat start          Start bridge in this window ^(visible / debug^).
+echo   farshid.bat start-hidden   Start bridge in background, no window.
+echo   farshid.bat stop           Stop the running bridge.
+echo   farshid.bat doctor         Diagnose: is everything healthy?
+echo   farshid.bat uninstall      Remove auto-start + per-user extension entry.
+echo   farshid.bat cleanup-admin  ONE-TIME admin step to remove an old
+echo                              HKLM force-install policy left by previous
+echo                              versions of this script. UAC prompt.
+echo                              Only needed if 'doctor' tells you to.
 echo.
-echo Advanced:  install ^| pack ^| stage ^| forceinstall ^| forceuninstall ^| uninstall ^| chrome ^| all ^| moc
+echo Advanced:  pack ^| stage ^| userinstall ^| useruninstall ^| chrome ^| moc
 echo.
 endlocal
 exit /b 0
@@ -149,44 +163,85 @@ REM (re-packs the .crx, re-stages, fixes the policy + shortcut)
 REM so any changes to the extension or bridge take effect.
 :cmd_setup
 echo.
-echo === Farshid AI WebClip - one-click setup ===
+echo === Farshid AI WebClip - one-click setup ^(no admin^) ===
 echo.
-net session >nul 2>&1
-if errorlevel 1 (
-    echo [farshid] One-time admin step needed to register the extension
-    echo           with Chrome. A UAC prompt will appear next.
-    powershell -NoProfile -Command "Start-Process -Wait -Verb RunAs -FilePath '%~f0' -ArgumentList @('/home:%USERPROFILE%','install')"
-    if errorlevel 1 (
-        echo [farshid] Elevated setup was cancelled or failed.
-        pause
-        endlocal
-        exit /b 1
-    )
-) else (
-    REM Already running elevated - just do the install steps inline.
-    call :do_pack
-    if errorlevel 1 ( pause & endlocal & exit /b 1 )
-    call :do_stage
-    if errorlevel 1 ( pause & endlocal & exit /b 1 )
-    call :do_forceinstall
-    if errorlevel 1 ( pause & endlocal & exit /b 1 )
-    if exist "%CHROME_LINK%" del "%CHROME_LINK%"
-    set "FAIL=0"
-    call :install_shortcut "%STAGE_LAUNCHER%" "start" "%BRIDGE_LINK%" "Farshid AI WebClip bridge + Ollama"
-    if not "%FAIL%"=="0" ( pause & endlocal & exit /b 1 )
+echo [farshid] [1/5] packing extension...
+call :do_pack
+if errorlevel 1 ( echo [farshid] pack failed. & pause & endlocal & exit /b 1 )
+echo.
+echo [farshid] [2/5] staging runtime into %STAGE_DIR% ...
+call :do_stage
+if errorlevel 1 ( echo [farshid] stage failed. & pause & endlocal & exit /b 1 )
+echo.
+echo [farshid] [3/5] removing dead HKCU sideload key ^(if any^)...
+REM Modern Chrome disables HKCU-sideloaded .crx files (not from
+REM the Web Store) with no Enable button. The key is useless and
+REM just clutters chrome://extensions, so we always remove it.
+reg delete "HKCU\Software\Google\Chrome\Extensions\lmlffgpmdhlcjmlpgkkmopolkeigpioc" /f >nul 2>&1
+echo.
+echo [farshid] [4/5] installing hidden auto-start shortcut...
+if exist "%CHROME_LINK%" del "%CHROME_LINK%"
+set "FAIL=0"
+call :install_shortcut_vbs "%STAGE_HIDDEN_VBS%" "%BRIDGE_LINK%" "Farshid AI WebClip bridge + Ollama (hidden)"
+if not "%FAIL%"=="0" ( echo [farshid] shortcut failed. & pause & endlocal & exit /b 1 )
+echo.
+echo [farshid] [5/5] starting bridge + Ollama hidden in background...
+call :stop_bridge
+call :start_bridge_hidden
+echo.
+reg query "HKLM\Software\Policies\Google\Chrome\ExtensionInstallForcelist" 2>nul | findstr /I "lmlffgpmdhlcjmlpgkkmopolkeigpioc" >nul
+if %ERRORLEVEL% EQU 0 (
+    echo [farshid] NOTE: A leftover HKLM force-install policy from a previous
+    echo           version of this script is still present. It can override
+    echo           your unpacked extension. Remove it once with:
+    echo               farshid.bat cleanup-admin
+    echo.
 )
+
+REM Copy the staged extension folder path to the clipboard so the
+REM user can just press Ctrl+L, Ctrl+V, Enter inside Chrome's
+ REM "Load unpacked" file picker.
+echo %STAGE_EXT% | clip
+
 echo.
 echo === Setup complete. ===
 echo.
-echo NEXT STEPS:
-echo   1) Fully quit Chrome ^(close ALL windows AND any tray icon^).
-echo   2) Reopen Chrome - 'Farshid AI WebClip' will be loaded automatically.
+echo The bridge + Ollama are now running in the BACKGROUND ^(no window^).
+echo They will auto-start hidden at every Windows login from now on.
+echo   Bridge log:  %USERPROFILE%\.farshid\bridge.log
+echo   Stop with:   farshid.bat stop
 echo.
-echo The bridge will now start in this window. Closing this window stops it.
-echo It will auto-start at every Windows login from now on.
+echo ============================================================
+echo  ONE-TIME Chrome step ^(only the very first time^)
+echo ============================================================
 echo.
-set "LAUNCH_CHROME="
-goto :cmd_start
+echo  Modern Chrome blocks any extension installed outside the Web
+echo  Store. The only way to load this one without paying Google
+echo  ^$5 to publish it is the developer-mode Load-unpacked click:
+echo.
+echo  1) Chrome will open at chrome://extensions in 2 seconds.
+echo  2) Top-right: turn ON "Developer mode".
+echo  3) Top-left: click "Load unpacked".
+echo  4) The extension folder path is ALREADY on your clipboard:
+echo.
+echo        %STAGE_EXT%
+echo.
+echo     In the file picker, click the address bar at the top,
+echo     press Ctrl+V to paste, then Enter, then "Select Folder".
+echo  5) The card now says "Farshid AI WebClip 0.5.0" - pin it from
+echo     the puzzle-piece toolbar icon. Done.
+echo.
+echo  You only do this ONCE. The folder path never moves, so future
+echo  re-runs of farshid.bat just refresh files at the same path;
+echo  click "Update" on chrome://extensions to pick up changes.
+echo ============================================================
+echo.
+call :open_chrome_extensions
+echo.
+echo [farshid] Press any key to close this window. The bridge keeps running.
+pause >nul
+endlocal
+exit /b 0
 
 REM ------------------------------------------------------------
 :cmd_moc
@@ -227,6 +282,15 @@ curl -fsS --max-time 2 "http://127.0.0.1:8765/health" 2>nul && echo. || echo    
 echo [7] Startup shortcut:
 set "_LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Farshid AI WebClip.lnk"
 if exist "%_LNK%" (echo     OK   %_LNK%) else (echo     MISS %_LNK%   ^(run: farshid.bat install^))
+echo [8] Per-user Chrome extension ^(HKCU, no admin^):
+reg query "HKCU\Software\Google\Chrome\Extensions\lmlffgpmdhlcjmlpgkkmopolkeigpioc" >nul 2>&1 && (
+    reg query "HKCU\Software\Google\Chrome\Extensions\lmlffgpmdhlcjmlpgkkmopolkeigpioc" | findstr /R "path version"
+) || (echo     MISS  ^(run: farshid.bat^))
+echo [9] Old HKLM force-install policy ^(should be EMPTY^):
+reg query "HKLM\Software\Policies\Google\Chrome\ExtensionInstallForcelist" /s 2>nul | findstr /I "lmlffgpmdhlcjmlpgkkmopolkeigpioc" >nul && (
+    echo     PRESENT  ^(blocks the per-user install^)
+    echo              run: farshid.bat cleanup-admin   ^(one-time admin^)
+) || (echo     OK   ^(not present^))
 echo.
 endlocal
 exit /b 0
@@ -379,15 +443,69 @@ if not exist "%_L%" (
 )
 goto :eof
 
+:install_shortcut_vbs
+REM %~1 = .vbs target   %~2 = .lnk path   %~3 = description
+REM Startup shortcut that launches a hidden VBScript - no console window
+REM ever appears at login.
+set "_T=%~1"
+set "_L=%~2"
+set "_D=%~3"
+echo [farshid] Creating hidden Startup shortcut: "%_L%"
+powershell -NoProfile -Command ^
+  "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%_L%'); $sc.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe'); $sc.Arguments = '\"%_T%\"'; $sc.WorkingDirectory = (Split-Path '%_T%'); $sc.WindowStyle = 7; $sc.IconLocation = '%PROJECT_DIR%\farshid.png,0'; $sc.Description = '%_D%'; $sc.Save()"
+if not exist "%_L%" (
+    echo [farshid] Failed to create "%_L%"
+    set "FAIL=1"
+)
+goto :eof
+
+REM ------------------------------------------------------------
+:cmd_start_hidden
+call :stop_bridge
+call :start_bridge_hidden
+echo [farshid] Bridge + Ollama started in background ^(no window^).
+echo           Log: %USERPROFILE%\.farshid\bridge.log
+endlocal
+exit /b 0
+
+:cmd_stop
+call :stop_bridge
+endlocal
+exit /b 0
+
+:start_bridge_hidden
+if not exist "%STAGE_HIDDEN_VBS%" (
+    echo [farshid] Hidden launcher missing: %STAGE_HIDDEN_VBS%
+    echo           Run: farshid.bat stage
+    exit /b 1
+)
+echo [farshid] Starting bridge + Ollama in background ^(hidden^)...
+wscript //nologo "%STAGE_HIDDEN_VBS%"
+goto :eof
+
+:stop_bridge
+REM Stop any process listening on 8765 (the bridge). Quiet if none.
+powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue; if ($c) { try { Stop-Process -Id $c.OwningProcess -Force -ErrorAction Stop; Write-Host '[farshid] Stopped bridge PID' $c.OwningProcess } catch {} } else { Write-Host '[farshid] No bridge running on 8765.' }"
+goto :eof
+
+:open_chrome_extensions
+echo [farshid] Opening chrome://extensions in your default browser...
+start "" "chrome://extensions/"
+REM Give Chrome a moment to bring its window up before this terminal closes.
+ping -n 3 127.0.0.1 >nul
+goto :eof
+
 REM ------------------------------------------------------------
 :cmd_uninstall
 call :remove_link "%BRIDGE_LINK%"
 call :remove_link "%CHROME_LINK%"
+call :do_useruninstall
 echo.
-echo [farshid] To also remove the Chrome force-install policy:
-echo               farshid.bat forceuninstall
-echo [farshid] To wipe the staged runtime:
+echo [farshid] To also remove the staged runtime:
 echo               rmdir /S /Q "%STAGE_DIR%"
+echo [farshid] If `farshid.bat doctor` still warns about an old HKLM
+echo           policy from a previous version, run ^(one-time admin^):
+echo               farshid.bat cleanup-admin
 endlocal
 exit /b 0
 
@@ -399,6 +517,109 @@ if exist "%~1" (
     echo [farshid] Not present:  "%~1"
 )
 goto :eof
+
+REM ------------------------------------------------------------
+REM Per-user Chrome sideload (no admin). Chrome reads
+REM HKCU\Software\Google\Chrome\Extensions\<id> with values
+REM   path    (REG_SZ) = full path to the .crx
+REM   version (REG_SZ) = must match the version inside the .crx
+REM and installs the extension into the current user's normal Chrome
+REM profile on next launch. First-time it shows a one-line "Enable
+REM extension" prompt; after that, every version bump auto-applies.
+:cmd_userinstall
+call :do_userinstall
+endlocal
+exit /b %errorlevel%
+
+:do_userinstall
+if not exist "%STAGE_CRX%" (
+    echo [farshid] Staged .crx missing. Run "farshid.bat stage" first.
+    exit /b 1
+)
+call :write_idscript
+set "EXT_ID="
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%IDSCRIPT%" "%STAGE_CRX%"`) do set "EXT_ID=%%I"
+if "%EXT_ID%"=="" (
+    echo [farshid] Could not derive extension ID from "%STAGE_CRX%"
+    exit /b 1
+)
+set "EXT_VERSION=0.0.0"
+for /f "tokens=2 delims=:," %%V in ('findstr /R /C:"\"version\"" "%STAGE_EXT%\manifest.json"') do (
+    set "EXT_VERSION=%%~V"
+    goto :ui_got_version
+)
+:ui_got_version
+set "EXT_VERSION=%EXT_VERSION: =%"
+set "EXT_VERSION=%EXT_VERSION:"=%"
+
+set "EXT_KEY=HKCU\Software\Google\Chrome\Extensions\%EXT_ID%"
+echo [farshid] Registering per-user Chrome extension ^(no admin^)
+echo           ID:      %EXT_ID%
+echo           version: %EXT_VERSION%
+echo           crx:     %STAGE_CRX%
+echo           key:     %EXT_KEY%
+reg add "%EXT_KEY%" /v path    /t REG_SZ /d "%STAGE_CRX%"   /f >nul
+if errorlevel 1 ( echo [farshid] Failed to write %EXT_KEY%\path & exit /b 1 )
+reg add "%EXT_KEY%" /v version /t REG_SZ /d "%EXT_VERSION%" /f >nul
+if errorlevel 1 ( echo [farshid] Failed to write %EXT_KEY%\version & exit /b 1 )
+exit /b 0
+
+:cmd_useruninstall
+call :do_useruninstall
+endlocal
+exit /b 0
+
+:do_useruninstall
+set "EXT_ID="
+if exist "%STAGE_CRX%" (
+    call :write_idscript
+    for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%IDSCRIPT%" "%STAGE_CRX%"`) do set "EXT_ID=%%I"
+)
+if "%EXT_ID%"=="" set "EXT_ID=lmlffgpmdhlcjmlpgkkmopolkeigpioc"
+set "EXT_KEY=HKCU\Software\Google\Chrome\Extensions\%EXT_ID%"
+reg query "%EXT_KEY%" >nul 2>&1
+if errorlevel 1 (
+    echo [farshid] Per-user extension key not present: %EXT_KEY%
+    goto :eof
+)
+reg delete "%EXT_KEY%" /f >nul 2>&1
+echo [farshid] Removed per-user extension key: %EXT_KEY%
+goto :eof
+
+REM ------------------------------------------------------------
+REM One-time, opt-in admin cleanup. Removes the leftover HKLM
+REM force-install policy that older versions of this script wrote.
+REM After running this once you NEVER need admin again - the
+REM normal `farshid.bat` uses HKCU only.
+:cmd_cleanup_admin
+echo.
+echo === Farshid AI WebClip - one-time admin cleanup ===
+echo.
+echo This will remove the OLD machine-wide Chrome policy
+echo   HKLM\Software\Policies\Google\Chrome\ExtensionInstallForcelist
+echo   HKLM\Software\Policies\Google\Chrome\ExtensionInstallSources
+echo that older versions of this script wrote. Asks for UAC ONCE.
+echo After this you never need admin again.
+echo.
+net session >nul 2>&1
+if errorlevel 1 (
+    powershell -NoProfile -Command "Start-Process -Wait -Verb RunAs -FilePath '%~f0' -ArgumentList 'cleanup-admin'"
+    endlocal
+    exit /b 0
+)
+set "FORCELIST_KEY=HKLM\Software\Policies\Google\Chrome\ExtensionInstallForcelist"
+set "SOURCES_KEY=HKLM\Software\Policies\Google\Chrome\ExtensionInstallSources"
+set "WOWFORCELIST_KEY=HKLM\Software\WOW6432Node\Policies\Google\Chrome\ExtensionInstallForcelist"
+set "WOWSOURCES_KEY=HKLM\Software\WOW6432Node\Policies\Google\Chrome\ExtensionInstallSources"
+reg delete "%FORCELIST_KEY%"    /v 1 /f >nul 2>&1 && echo [farshid] Removed %FORCELIST_KEY%\1
+reg delete "%SOURCES_KEY%"      /v 1 /f >nul 2>&1 && echo [farshid] Removed %SOURCES_KEY%\1
+reg delete "%WOWFORCELIST_KEY%" /v 1 /f >nul 2>&1 && echo [farshid] Removed %WOWFORCELIST_KEY%\1
+reg delete "%WOWSOURCES_KEY%"   /v 1 /f >nul 2>&1 && echo [farshid] Removed %WOWSOURCES_KEY%\1
+echo.
+echo [farshid] Done. Now fully quit Chrome ^(incl. tray icon^) and reopen.
+pause
+endlocal
+exit /b 0
 
 REM ------------------------------------------------------------
 :cmd_pack
@@ -466,12 +687,45 @@ set "STAGE_CRX_URL=file:///%STAGE_CRX_URL%"
 >> "%STAGE_UPDATES_XML%" echo   ^</app^>
 >> "%STAGE_UPDATES_XML%" echo ^</gupdate^>
 
+REM Hidden launcher: a .vbs that starts Ollama (if needed) and the
+REM bridge with Window=0 (truly invisible). Logs go to bridge.log /
+REM ollama.log under %USERPROFILE%\.farshid\.
+set "_PYTHON_ESC=%PYTHON:\=\\%"
+set "_OLLAMA_ESC=%OLLAMA:\=\\%"
+set "_BRIDGE_DIR_ESC=%STAGE_BRIDGE:\=\\%"
+set "_HOME_ESC=%USERPROFILE:\=\\%"
+>  "%STAGE_HIDDEN_VBS%" echo Option Explicit
+>> "%STAGE_HIDDEN_VBS%" echo Dim sh, fso, home, bridgeLog, ollamaLog
+>> "%STAGE_HIDDEN_VBS%" echo Set sh = CreateObject("WScript.Shell")
+>> "%STAGE_HIDDEN_VBS%" echo Set fso = CreateObject("Scripting.FileSystemObject")
+>> "%STAGE_HIDDEN_VBS%" echo home = sh.ExpandEnvironmentStrings("%%USERPROFILE%%") ^& "\.farshid"
+>> "%STAGE_HIDDEN_VBS%" echo If Not fso.FolderExists(home) Then fso.CreateFolder home
+>> "%STAGE_HIDDEN_VBS%" echo bridgeLog = home ^& "\bridge.log"
+>> "%STAGE_HIDDEN_VBS%" echo ollamaLog = home ^& "\ollama.log"
+>> "%STAGE_HIDDEN_VBS%" echo ' --- Start Ollama if not already serving ---
+>> "%STAGE_HIDDEN_VBS%" echo Dim http, ok : ok = False
+>> "%STAGE_HIDDEN_VBS%" echo On Error Resume Next
+>> "%STAGE_HIDDEN_VBS%" echo Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+>> "%STAGE_HIDDEN_VBS%" echo http.setTimeouts 1000, 1000, 1000, 1000
+>> "%STAGE_HIDDEN_VBS%" echo http.open "GET", "http://127.0.0.1:11434/api/tags", False
+>> "%STAGE_HIDDEN_VBS%" echo http.send
+>> "%STAGE_HIDDEN_VBS%" echo If Err.Number = 0 And http.status = 200 Then ok = True
+>> "%STAGE_HIDDEN_VBS%" echo On Error Goto 0
+>> "%STAGE_HIDDEN_VBS%" echo If Not ok Then
+>> "%STAGE_HIDDEN_VBS%" echo     sh.Run "cmd /c """"%_OLLAMA_ESC%"" serve >> """ ^& ollamaLog ^& """ 2>&1""", 0, False
+>> "%STAGE_HIDDEN_VBS%" echo     WScript.Sleep 1500
+>> "%STAGE_HIDDEN_VBS%" echo End If
+>> "%STAGE_HIDDEN_VBS%" echo ' --- Start the bridge (hidden, no console) ---
+>> "%STAGE_HIDDEN_VBS%" echo sh.CurrentDirectory = "%_BRIDGE_DIR_ESC%"
+>> "%STAGE_HIDDEN_VBS%" echo sh.Run "cmd /c """"%_PYTHON_ESC%"" """ ^& sh.CurrentDirectory ^& "\server.py"" >> """ ^& bridgeLog ^& """ 2>&1""", 0, False
+
 echo [farshid] Staged:
-echo     bridge      %STAGE_BRIDGE%
-echo     extension   %STAGE_EXT%
-echo     .crx        %STAGE_CRX%
-echo     updates.xml %STAGE_UPDATES_XML%
-echo     launcher    %STAGE_LAUNCHER%
+echo     bridge       %STAGE_BRIDGE%
+echo     extension    %STAGE_EXT%
+echo     .crx         %STAGE_CRX%
+echo     updates.xml  %STAGE_UPDATES_XML%
+echo     launcher     %STAGE_LAUNCHER%
+echo     hidden VBS   %STAGE_HIDDEN_VBS%
 exit /b 0
 
 :do_pack

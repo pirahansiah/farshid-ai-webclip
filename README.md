@@ -67,26 +67,30 @@ bash scripts/farshid.sh install
 ```
 
 ```bat
-:: Windows
+:: Windows  (no admin needed)
 ollama pull granite4:latest
 :: Either run from a terminal:
-scripts\farshid.bat install
-:: ...or just double-click scripts\farshid.bat in Explorer
-:: (zero-arg = full setup + start; UAC prompt the first time)
+scripts\farshid.bat
+:: ...or just double-click scripts\farshid.bat in Explorer.
+:: Zero-arg = full setup, then starts the bridge HIDDEN in the
+:: background (no terminal window). Final step is one click in Chrome.
 ```
 
-That single `install` command:
+That single command:
 
 - packs the extension,
 - copies a self-contained runtime into `~/.farshid/runtime/` (so it works
   even if this project lives in Dropbox / iCloud / a path with spaces),
 - registers the bridge to auto-start at every login,
+- on Windows, starts the bridge **hidden in the background** (no
+  console window) and copies the staged extension folder path to
+  your clipboard,
 - opens `chrome://extensions` for you with one-time instructions.
 
-After it finishes, on **macOS** you do one 30-second click-through in
-Chrome (load unpacked extension — see step 4 below). On **Windows** and
-**Linux** the extension is auto-installed via Chrome's enterprise policy
-and you just open Chrome.
+After it finishes, on **all three OSes** you do one 30-second
+click-through in Chrome (`chrome://extensions` → Developer mode →
+Load unpacked → paste the path). On **Linux** the extension is
+auto-installed via Chrome's enterprise policy and you just open Chrome.
 
 ---
 
@@ -121,27 +125,73 @@ The installer prints a final block telling you exactly what to do next.
 
 ### Windows
 
+No admin password. No UAC prompt. No visible terminal window.
+
 ```bat
 cd farshid-ai-webclip
-scripts\farshid.bat install
+scripts\farshid.bat
 ```
 
 Or just **double-click `scripts\farshid.bat`** in Explorer — with no
-argument it runs the full one-click setup (UAC prompt the first time)
-and then keeps the bridge running in the same window. Closing the
-window stops the bridge; auto-start handles every subsequent login.
+argument it runs the full one-click setup, then exits. The bridge
+keeps running **hidden in the background** (a `wscript.exe` launching
+`bridge-hidden.vbs` — no console, no taskbar icon). Auto-start
+handles every subsequent login the same way (still hidden).
 
-(Self-elevates with UAC; writes the Chrome force-install policy under
-`HKLM\Software\Policies\Google\Chrome` and a Startup-folder shortcut.)
+What the script does, in order:
 
-### What `install` actually does
+1. **Packs** the extension into `dist\farshid-ai-webclip.crx`.
+2. **Stages** a self-contained copy of the bridge, the unpacked
+   extension, the `.crx`, and a hidden VBScript launcher into
+   `%USERPROFILE%\.farshid\runtime\` — a stable path that survives
+   project moves and OneDrive/Dropbox sandboxing.
+3. **Removes** any leftover dead `HKCU\Software\Google\Chrome\Extensions\<id>`
+   sideload key. (Modern Chrome silently disables HKCU-sideloaded
+   `.crx` files — the key just clutters `chrome://extensions` with a
+   greyed-out card and no Enable button.)
+4. **Installs** a hidden Startup-folder shortcut
+   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Farshid AI WebClip.lnk`
+   that runs `wscript.exe bridge-hidden.vbs` at login (no window).
+5. **Starts** the bridge + Ollama hidden in the background right now.
+6. **Copies** `%USERPROFILE%\.farshid\runtime\extension` to your
+   clipboard and **opens** `chrome://extensions/`, ready for the
+   one-time Load-unpacked click below.
+
+Finish in Chrome (one time, ~20 seconds):
+
+1. Top-right of `chrome://extensions`: turn **Developer mode** ON.
+2. Top-left: click **Load unpacked**.
+3. In the file picker click the address bar at the top, press
+   **Ctrl+V** (the path is already on your clipboard), Enter, then
+   **Select Folder**.
+4. The card shows **Farshid AI WebClip 0.5.0** — pin it via the
+   puzzle-piece icon in the toolbar. Done forever.
+
+Because the staged path never changes, you only do step 1–4 **once**.
+Later, after editing `extension\` or `bridge\`, just double-click
+`farshid.bat` again and click **Update** on `chrome://extensions/` —
+the loaded extension reloads in place.
+
+> **Why no admin?** Earlier versions of this script wrote a
+> machine-wide HKLM `ExtensionInstallForcelist` policy, which needed
+> UAC. We dropped that — Google deliberately makes any silent extension
+> install on consumer Chrome require either admin (HKLM policy) or
+> publishing to the Web Store ($5 + review). Load-unpacked is the
+> only no-admin path that works, and the path is permanent so it's
+> still a one-click experience.
+>
+> If you ran an older version that wrote the HKLM policy and want it
+> cleaned up, run `scripts\farshid.bat cleanup-admin` once (single
+> UAC prompt → done forever).
+
+### What `setup` actually does
 
 | Step | All OSes                                                                       |
 | ---- | ------------------------------------------------------------------------------ |
 | 1    | Packs the extension into `dist/farshid-ai-webclip.crx` (+ `.pem`, `updates.xml`). The signing key is reused on every run so the extension ID is stable. |
-| 2    | Stages a self-contained copy of bridge code, the unpacked extension, the `.crx`, and a copy of the launcher into `~/.farshid/runtime/` (macOS/Linux) or `%USERPROFILE%\.farshid\runtime\` (Windows). Everything below points at that staged copy, so the project folder is no longer required at runtime, and OneDrive / Dropbox / iCloud sandboxing cannot break startup. |
-| 3    | Registers the bridge + Ollama to start at login (LaunchAgent on macOS, systemd `--user` unit on Linux, Startup-folder shortcut pointing at the staged launcher on Windows). |
-| 4    | **Linux & Windows only:** writes Chrome's `ExtensionInstallForcelist` policy (pointing at the staged `updates.xml`) so the extension installs (and re-installs) automatically with no user action. |
+| 2    | Stages a self-contained copy of bridge code, the unpacked extension, the `.crx`, and a copy of the launcher into `~/.farshid/runtime/` (macOS/Linux) or `%USERPROFILE%\.farshid\runtime\` (Windows). On Windows it also writes a `bridge-hidden.vbs` so login auto-start runs with no console window. The project folder is no longer required at runtime, and OneDrive / Dropbox / iCloud sandboxing cannot break startup. |
+| 3    | Registers the bridge + Ollama to start at login (LaunchAgent on macOS, systemd `--user` unit on Linux, Startup-folder shortcut pointing at the **hidden** VBScript launcher on Windows). |
+| 4    | **Linux only:** writes Chrome's `ExtensionInstallForcelist` policy (pointing at the staged `updates.xml`) so the extension installs (and re-installs) automatically with no user action. **Windows & macOS:** opens `chrome://extensions` for the one-time **Load unpacked** click (no admin needed). |
 
 ### macOS-specific finish step
 
@@ -216,7 +266,7 @@ first and use **Clip selection** instead.
 | `~/.farshid/runtime/logs/`                    | Bridge + LaunchAgent logs (`launchagent.out.log`, `.err.log`).  |
 | `~/Library/LaunchAgents/com.farshid.aiwebclip.plist` (macOS) | Auto-start LaunchAgent.                          |
 | `~/.config/systemd/user/farshid-ai-webclip.service` (Linux)  | Auto-start systemd unit.                         |
-| `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Farshid AI WebClip.lnk` (Windows) | Startup shortcut pointing at the staged launcher. |
+| `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Farshid AI WebClip.lnk` (Windows) | Startup shortcut. Targets `wscript.exe bridge-hidden.vbs` so the bridge runs hidden at every login (no console window). |
 
 ---
 
